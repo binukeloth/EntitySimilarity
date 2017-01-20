@@ -1,9 +1,0 @@
-AK,F,Ashley,36
-AK,F,Anna,34
-AK,F,Alyssa,31
-AK,F,Ashlyy,28
-AK,F,Alexis,23
-AK,F,Amber,22
-AK,F,Ambe,16
-AK,F,Anan,16
-AK,F,Amabe,16
