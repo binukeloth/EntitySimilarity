@@ -6,38 +6,41 @@ Created on Jan 18, 2017
 from __future__ import print_function
 
 import editdistance
+import string
 import operator
+import warnings
+import sys,argparse
 from scipy.stats.stats import pearsonr
+from sklearn.metrics.pairwise import cosine_similarity 
 from sklearn.cluster import AffinityPropagation
-from sklearn.metrics.pairwise import cosine_similarity
 
 import numpy as np
 import pandas as pd
 
-from binu.similarity.app.appconf import appConfig;
+from binu.similarity.app.appconf import techConfig;
+from binu.similarity.metric import MetricFactory
+
+# warnings.filterwarnings("ignore",category=DeprecationWarning)
 
 class App:
-    def __init__(self, config):
-        self.config = config
-        print("Loading Data.......\t", end='')
-        self.readData()
-        print("Done")
+    def __init__(self, filename):
+        print("Loading Data.......")
+        self.readData(filename)
+        print("\tInput File        : " + filename)
+        print("\tNumber of records : " + str(self.data.shape[0]))
+        print("\tNumber of states  : " + str(self.stateData.shape[0]))
+        print("Loading Data.......\tCompleted")
         
         print("Clustering Names...\t", end='')
         self.groupSimilarEntities((self.data[1]).unique())
         self.appendGroupInfo()
-        print("Done")
+        self.updateCount();
+        print("Completed")
         
-    def readData(self): 
-        self.data = pd.read_csv(self.config['source'], header=None)
+    def readData(self, filename):
+        self.data = pd.read_csv(filename, header=None)
+        self.stateData = self.data.iloc[:,[0,3]].groupby(by=[0]).sum().reset_index();
         
-#         self.data = self.data.sort_values()
-        
-#     def levDistance(self, index1, index2):
-#         i, j = int(index1[0]), int(index2[0])     # extract indices
-#         return editdistance.eval(self.uniqNames[i], self.uniqNames[j])
-        
-
     def getSimilarityMatrix(self, uniqNames):
         similarityMatrix = -1 * np.array([[editdistance.eval(w1, w2) for w1 in uniqNames] for w2 in uniqNames])
         return similarityMatrix
@@ -68,68 +71,74 @@ class App:
         
     def findSimilarity(self, refEntity):
         if((self.data.iloc[:,0] == refEntity).sum() == 0 ):
-            print("Entity '" + refEntity + "' not present !")
+            print("\tEntity '" + refEntity + "' not present !")
             return None
         
         categories = (self.data['gender']).unique()
-        print(categories)
-        
         entities = self.data.iloc[:,0].unique()
         initValue = [0] * len(entities)
         associationList = dict(zip(entities, initValue))
+        columnsList = ['group', 'cnt', 'ratio']
+        refMetric = 'ratio_ref'
+        othMetric = 'ratio_oth'
+        
+        m = MetricFactory.getMetric(techConfig['similarity'])
         
         for catg in categories:
-            self.dataRef = self.data.loc[(self.data.iloc[:,0] == refEntity) & (self.data.iloc[:,1] == catg)].iloc[:,[2,3]]
-            #print(self.dataRef.iloc[:,2].unique())
+            self.dataRef = self.data.loc[(self.data.iloc[:,0] == refEntity) 
+                                    & (self.data.iloc[:,1] == catg)].loc[:,columnsList]
             for entity in entities:
-                print("Running for " + catg + " & " + entity)
-                
                 if(entity == refEntity):
                     continue;
                 
-                print("Running for " + catg + " & " + entity)
-                dataOther = self.data.loc[(self.data.iloc[:,0] == entity) & (self.data.iloc[:,1] == catg)].iloc[:,[2,3]]
-    #             print(dataOther.iloc[:,2].unique())
-#                 print(entity + ' has ' + dataOther.shape[0].__str__() + ' values')
+                dataOther = self.data.loc[(self.data.iloc[:,0] == entity) 
+                                    & (self.data.iloc[:,1] == catg)].loc[:,columnsList]
+                refCatgCount = dataOther.loc[:,'cnt'].sum()
+                totalCount = self.stateData.loc[self.stateData.iloc[:,0] == entity].iat[0, 1]
                 merge = pd.merge(self.dataRef, dataOther, left_on='group', right_on='group',
                                  how="outer", indicator=True, suffixes=('_ref', '_oth'))
                
-                merge['cnt_ref'].fillna(0, inplace=True)
-                merge['cnt_oth'].fillna(0, inplace=True)
+                merge[refMetric].fillna(0, inplace=True)
+                merge[othMetric].fillna(0, inplace=True)
                 
-    #             merge = merge.dropna(how='any')
-#                 print(merge)
+                association = m.value(merge.loc[:, refMetric], merge.loc[:, othMetric])
+                associationList[entity] += (association * refCatgCount / totalCount)
+#                 print("Association between " + refEntity + " and " + entity + " is " + str(association))
                 
-    #             association = cosine_similarity(merge.loc[:, '3_x'], merge.loc[:, '3_y'])
-                association = pearsonr(merge.loc[:, 'cnt_ref'], merge.loc[:, 'cnt_oth'])
-                associationList[entity] += association[0]
-                print("Association between " + refEntity + " and " + entity + " is " + association[0].__str__())
-                
-#             print(associationList.sort_values(ascending=False)[:3])
         return associationList
+    
+    def updateCount(self):
+        df = self.data.loc[:,['state', 'gender', 'cnt']]
+        summarydf = df.groupby(['state', 'gender']).sum().reset_index()
+        
+        self.data = self.data.merge(summarydf,on=['state', 'gender'], suffixes=['', 'right'])
+        self.data['ratio'] = self.data['cnt'] / self.data['cntright']
 
     def showResult(self, scores):
-        print("-----------------------------------------")
-        print("Best Match   - " + scores[0][0].__str__() + " with " + str(round(scores[0][1], 4)))
-        print("Second Match - " + scores[1][0].__str__() + " with " + str(round(scores[1][1], 4)))
-        print("Third Match  - " + scores[2][0].__str__() + " with " + str(round(scores[2][1], 4)))
-        print("-----------------------------------------")
+        print("\t-----------------------------------------")
+        print("\tBest Match   - " + str(scores[0][0]) + " with " + str(round(scores[0][1], 4)))
+        print("\tSecond Match - " + str(scores[1][0]) + " with " + str(round(scores[1][1], 4)))
+        print("\tThird Match  - " + str(scores[2][0]) + " with " + str(round(scores[2][1], 4)))
+        print("\t-----------------------------------------")
         
-        
-if __name__ == '__main__':
-    app = App(appConfig)
+def readInput(cmdArgs):
+    parser = argparse.ArgumentParser(description='Application to compute similarity')
+    parser.add_argument('-i','--input', help='Input file name',required=True)
+    parser.add_argument('-s','--states',help='State Names', required=True)
+    args = parser.parse_args()
     
-    repeat = 'y'
-    while(repeat.lower() == 'y'):
-        entity = raw_input('\n * Enter Reference state :')
+    return args.input, args.states
+
+if __name__ == '__main__':
+    filename,states = readInput(sys.argv)
+    app = App(filename)
+    entityList = string.split(states, sep=",")
+    
+    for entity in entityList:
+        print("Finding similar states to '" + entity + "'")
         scores = app.findSimilarity(entity.upper())
+        scores = scores
         if(scores != None):
             sortedScores = sorted(scores.items(), key=operator.itemgetter(1), reverse=True)
             app.showResult(sortedScores)
-        
-        repeat = raw_input('\n\n * Do you want to continue? Press \'y\' to continue :')
-    
-#     list1 = app.findSimilarity(entity, 'M')
-#     list2 = app.findSimilarity(entity, 'F')
-#     
-#     print((list1 + list2).sort_values(ascending=False)[:3])
+        print("Similarities.....\tCompleted ")
