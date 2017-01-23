@@ -4,4 +4,5 @@
     b. cosine - Cosine similarity
 '''
 techConfig = {
+    'similarity': 'pearson'
 }
